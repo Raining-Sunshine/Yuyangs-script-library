@@ -1,0 +1,145 @@
+# ============================================================
+# Batch script for ESP colored surface vertices (VMD)
+# Auto-detect systems by scanning mol*.pdb in current folder
+#
+# Requires per system i:
+#   mol{i}.pdb
+#   vtx{i}.pdb
+# Optional (recommended):
+#   surfanalysis{i}.pdb
+# ============================================================
+
+# ---------- Global display settings ----------
+color scale method BWR
+color Display Background white
+axes location Off
+display depthcue off
+display rendermode Normal
+
+# ---------- User parameters ----------
+set colorlow  -22
+set colorhigh  22
+set ptsize     0.2
+set outdir    "put the path of the output directorie here"   ;# Windows: use / or \\
+# ---------- Global shift before render ----------
+set SHIFT_LEFT {-3.0 0.0 0.0}   ;# move left in x (adjust magnitude if needed)
+
+file mkdir $outdir
+
+# ---------- Helper: refresh display ----------
+proc refresh_display {} {
+    display update
+    after 300
+}
+
+# ---------- Helper: auto-detect system indices ----------
+proc detect_system_indices {} {
+    # Find all mol*.pdb files in current working directory
+    set molfiles [glob -nocomplain "mol*.pdb"]
+    set idxlist {}
+
+    foreach f $molfiles {
+        # Match mol{number}.pdb
+        if {[regexp {^mol([0-9]+)\.pdb$} $f -> idx]} {
+            # Require corresponding vtx{idx}.pdb
+            if {[file exists "vtx${idx}.pdb"]} {
+                lappend idxlist [expr {int($idx)}]
+            }
+        }
+    }
+
+    # unique + sort increasing
+    set idxlist [lsort -unique -integer $idxlist]
+    return $idxlist
+}
+
+# ---------- Helper: shift molecule ----------
+proc shift_mol {molid vec} {
+    set sel [atomselect $molid all]
+    $sel moveby $vec
+    $sel delete
+}
+
+
+# ---------- Detect systems ----------
+set systems [detect_system_indices]
+if {[llength $systems] == 0} {
+    puts "ERROR: No valid systems found. Need mol{i}.pdb and vtx{i}.pdb in current folder."
+    quit
+}
+
+puts "Detected systems: $systems"
+
+# ============================================================
+# Main loop over detected indices
+# ============================================================
+foreach i $systems {
+
+    puts "=== Processing system $i ==="
+
+    # ---- Load files and record molids explicitly ----
+    set molid_mol  [mol new "mol$i.pdb"  waitfor all]
+    set molid_vtx  [mol new "vtx$i.pdb"  waitfor all]
+
+    # surfanalysis is optional; only load if present
+    set has_surf 0
+    if {[file exists "surfanalysis$i.pdb"]} {
+        set molid_surf [mol new "surfanalysis$i.pdb" waitfor all]
+        set has_surf 1
+    }
+
+    # ---- mol representation (licorice) ----
+    mol modstyle 0 $molid_mol Licorice 0.1
+    mol modcolor 0 $molid_mol Element
+
+    # ---- vtx representation (ESP dots) ----
+    mol modcolor 0 $molid_vtx Beta
+    mol modstyle 0 $molid_vtx Dotted $ptsize
+    mol scaleminmax $molid_vtx 0 $colorlow $colorhigh
+
+    # ---- surfanalysis extrema (vdW surface) ----
+    if {$has_surf} {
+        mol modstyle 0 $molid_surf VDW 0.06 20
+        mol modselect 0 $molid_surf name C
+        mol modcolor 0 $molid_surf ColorID 32
+
+        mol addrep $molid_surf
+        mol modstyle 1 $molid_surf VDW 0.06 20
+        mol modselect 1 $molid_surf name O
+        mol modcolor 1 $molid_surf ColorID 21
+    }
+
+    # ---- Apply global left shift to all layers ----
+    shift_mol $molid_mol $SHIFT_LEFT
+    shift_mol $molid_vtx $SHIFT_LEFT
+    if {$has_surf} {
+        shift_mol $molid_surf $SHIFT_LEFT
+    }
+
+    # ====================================================
+    # Render bone{i}.bmp  (mol + surf if available, no vtx)
+    # ====================================================
+    mol on  $molid_mol
+    mol off $molid_vtx
+    if {$has_surf} { mol on $molid_surf }
+
+    refresh_display
+    render snapshot "$outdir/bone$i.bmp"
+
+    # ====================================================
+    # Render vtx{i}.bmp  (vtx only)
+    # ====================================================
+    mol off $molid_mol
+    mol on  $molid_vtx
+    if {$has_surf} { mol off $molid_surf }
+
+    refresh_display
+    render snapshot "$outdir/vtx$i.bmp"
+
+    # ---- Cleanup ----
+    if {$has_surf} { mol delete $molid_surf }
+    mol delete $molid_vtx
+    mol delete $molid_mol
+}
+
+puts "=== Batch rendering finished ==="
